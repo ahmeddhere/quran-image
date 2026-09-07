@@ -2,7 +2,7 @@
 
 Given a device's screen width the service renders the requested Madani Mushaf
 page from the King Fahd Complex "QCF v1" fonts, caches it (RAM + disk), and
-serves it over HTTP.  See ``SERVER.md`` for the architecture and API.
+serves it over HTTP.  See ``README.md`` for the architecture and API.
 
 Public surface:
     quran_image.server   - the FastAPI app (``uvicorn quran_image.server:app``)

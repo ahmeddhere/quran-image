@@ -6,7 +6,7 @@
     GET  /v1/pages/{page}/layout?w=&v=    the page's per-word pixel boxes (JSON)
     GET  /healthz  /v1/stats
 
-The device flow (see ``SERVER.md``):
+The device flow (see ``README.md``):
 
 1. read the real screen: ``physical_w = logical_w * devicePixelRatio``
 2. ``GET /v1/pages/{page}?w={physical_w}&fmt=webp&v={asset_version}``
