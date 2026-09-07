@@ -1,11 +1,15 @@
-# On-demand Qur'an page-image rendering server — runtime dependencies.
+# On-demand Qur'an page-image rendering server — dependencies.
 # (sqlite3, argparse, concurrent.futures, http are in the standard library.)
 
-# rendering
+# --- rendering ---
 Pillow>=10.0,<13
 freetype-py>=2.4
 numpy>=1.24
 
-# HTTP API
+# --- HTTP API ---
 fastapi>=0.110
 uvicorn[standard]>=0.27
+
+# --- tests (only needed to run `pytest`) ---
+pytest>=8.0
+httpx>=0.27          # required by fastapi.testclient.TestClient

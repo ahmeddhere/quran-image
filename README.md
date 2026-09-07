@@ -231,7 +231,7 @@ output is byte-exact.
 ## Testing
 
 ```bash
-python -m pip install -r requirements-dev.txt   # pytest, httpx
+python -m pip install -r requirements.txt   # includes pytest + httpx
 python -m pytest -q
 ```
 

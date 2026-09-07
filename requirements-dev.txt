@@ -1,5 +1,0 @@
--r requirements.txt
-
-# test suite
-pytest>=8.0
-httpx>=0.27          # required by fastapi.testclient.TestClient
