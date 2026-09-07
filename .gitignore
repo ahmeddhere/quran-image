@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+*.log
+
+# virtualenvs
+.venv/
+venv/
+
+# server-side render cache
+/cache/
+
+# built once from the SQL dump by scripts/import_layout.py
+/data/layout.sqlite

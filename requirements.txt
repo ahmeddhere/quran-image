@@ -1,0 +1,11 @@
+# On-demand Qur'an page-image rendering server — runtime dependencies.
+# (sqlite3, argparse, concurrent.futures, http are in the standard library.)
+
+# rendering
+Pillow>=10.0,<13
+freetype-py>=2.4
+numpy>=1.24
+
+# HTTP API
+fastapi>=0.110
+uvicorn[standard]>=0.27
