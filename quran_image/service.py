@@ -278,12 +278,13 @@ class RenderService:
     # -- helpers for the fallback path ----------------------------------- #
     @staticmethod
     def _pref_order(target: int) -> list[int]:
-        """Ladder rungs ranked for use as a stand-in for ``target``: closest
-        rung >= target first (device only downscales -> crisp), then the
-        closest rungs below it."""
-        ge = [w for w in WIDTH_LADDER if w >= target]
-        lt = [w for w in WIDTH_LADDER if w < target][::-1]
-        return ge + lt
+        """Ladder rungs ranked as a cold-cache stand-in for ``target``: the
+        closest rung by absolute pixel distance first, a larger rung winning an
+        exact tie (the device then only downscales).  Unlike normal rung
+        selection this does *not* deliberately snap upward - a far-larger rung
+        is used only when no nearer rung is cached, so a 1080 miss never serves
+        a 4x-heavier 2048 image when a 1010 or 1120 rung is warm."""
+        return sorted(WIDTH_LADDER, key=lambda w: (abs(w - target), -w))
 
     @staticmethod
     def _snap_spec(spec: RenderSpec, width: int) -> RenderSpec:

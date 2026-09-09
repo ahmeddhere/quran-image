@@ -35,23 +35,37 @@ from quran_image.service import RenderBusy, RenderService  # noqa: E402
 def test_snap_width_rounds_up_and_clamps():
     assert snap_width(1) == MIN_WIDTH
     assert snap_width(10_000) == MAX_WIDTH
-    assert snap_width(1081) == 1170          # up to next rung
-    assert snap_width(1080) == 1080          # exact rung stays
+    assert snap_width(1000) == 1010          # normal request snaps to next larger rung
+    assert snap_width(1121) == 1260          # up to next rung
+    assert snap_width(1120) == 1120          # exact rung stays
+
+
+def test_width_ladder_is_geometric_and_keeps_the_legacy_rung():
+    assert list(WIDTH_LADDER) == sorted(WIDTH_LADDER)          # ascending
+    assert len(set(WIDTH_LADDER)) == len(WIDTH_LADDER)         # no duplicates
+    assert 1260 in WIDTH_LADDER                                # legacy rung pinned
+    assert WIDTH_LADDER[0] == MIN_WIDTH
+    assert WIDTH_LADDER[-1] == MAX_WIDTH == 2048               # upper limit unchanged
+    ratios = [b / a for a, b in zip(WIDTH_LADDER, WIDTH_LADDER[1:])]
+    # ~10-12% growth per rung and no near-duplicate cluster
+    # (the old ladder had 1242 -> 1260 -> 1290, ratios ~1.014)
+    assert all(1.05 < r < 1.20 for r in ratios)
+    assert 1242 not in WIDTH_LADDER and 1290 not in WIDTH_LADDER
 
 
 def test_negotiate_from_screen_metrics():
     spec = negotiate(screen_width_px=412, dpr=2.625, fmt="webp")
-    assert spec.width == 1170
-    assert spec.height == int(1170 * PHI)
+    assert spec.width == 1120
+    assert spec.height == int(1120 * PHI)
     assert spec.fmt == "webp"
     assert spec.requested_width == 1082
-    assert spec.key == "1170/webp"
+    assert spec.key == "1120/webp"
 
 
 def test_negotiate_explicit_width_and_default():
-    assert negotiate(w=1000).width == 1000
+    assert negotiate(w=1010).width == 1010
     assert negotiate().width == negotiate(w=1080).width  # DEFAULT_WIDTH
-    assert negotiate(screen_width_px=400, dpr=2, max_width=700).width == 720
+    assert negotiate(screen_width_px=400, dpr=2, max_width=700).width == 740
 
 
 def test_negotiate_rejects_bad_input():
@@ -151,7 +165,7 @@ def test_service_miss_then_memory_then_disk(tmp_path):
     spec = negotiate(w=1080, fmt="png")
 
     (data1, _, etag1), state1 = svc.get(3, spec)
-    assert state1 == "MISS" and data1 == b"IMG:3:1080:png"
+    assert state1 == "MISS" and data1 == b"IMG:3:1120:png"  # w=1080 snaps up to 1120
 
     _, state2 = svc.get(3, spec)
     assert state2 == "HIT-MEM"
@@ -170,7 +184,7 @@ def test_service_different_widths_are_independent(tmp_path):
     svc.get(3, negotiate(w=1080))
     svc.get(3, negotiate(w=1080, fmt="webp"))
     assert len(calls) == 3
-    assert {c[1:] for c in calls} == {(720, "png"), (1080, "png"), (1080, "webp")}
+    assert {c[1:] for c in calls} == {(740, "png"), (1120, "png"), (1120, "webp")}
 
 
 def _wait(pred, timeout=5.0):
@@ -182,30 +196,51 @@ def _wait(pred, timeout=5.0):
     raise AssertionError("condition not met within timeout")
 
 
-def test_pref_order_prefers_larger_then_closest_below():
-    order = RenderService._pref_order(1080)
-    assert order[:3] == [1080, 1170, 1242]          # exact, then upward
-    assert order[order.index(2048) + 1] == 1000     # then closest below
+def test_pref_order_ranks_by_distance_then_prefers_larger():
+    order = RenderService._pref_order(1120)
+    assert order[0] == 1120                          # exact rung first
+    assert order[1] == 1010 and order[2] == 1260     # 110px vs 140px away
+    assert order.index(1010) < order.index(2048)     # a near-smaller rung beats
+    #                                                  a far-larger one
     assert set(order) == set(WIDTH_LADDER)
+    # a width exactly between two rungs -> the larger of the two wins the tie
+    assert RenderService._pref_order(1190)[0] == 1260
 
 
-def test_get_or_fallback_prefers_larger_then_backfills(tmp_path):
+def test_get_or_fallback_prefers_closest_cached_rung_then_backfills(tmp_path):
     calls = []
     svc = _svc(tmp_path, calls)
-    svc.get(3, negotiate(w=720))
-    svc.get(3, negotiate(w=1440))
+    svc.get(3, negotiate(w=910))                     # a near rung below the target
+    svc.get(3, negotiate(w=2048))                    # a far rung above the target
 
-    payload, state, served = svc.get_or_fallback(3, negotiate(w=1080))
+    payload, state, served = svc.get_or_fallback(3, negotiate(w=1080))  # -> 1120
     assert state == "FALLBACK"
-    assert served.width == 1440                      # the nearer rung >= 1080
-    assert payload[0] == b"IMG:3:1440:png"
+    assert served.width == 910                       # closest cached, not 2048
+    assert payload[0] == b"IMG:3:910:png"
 
     key = svc.cache_key(3, negotiate(w=1080))
     _wait(lambda: svc.disk.exists(key))              # background render lands
     p2, s2, _ = svc.get_or_fallback(3, negotiate(w=1080))
     assert s2 in ("HIT-MEM", "HIT-DISK")
-    assert p2[0] == b"IMG:3:1080:png"
-    assert calls.count((3, 1080, "png")) == 1
+    assert p2[0] == b"IMG:3:1120:png"
+    assert calls.count((3, 1120, "png")) == 1
+
+
+def test_get_or_fallback_picks_larger_rung_when_it_is_closer(tmp_path):
+    calls = []
+    svc = _svc(tmp_path, calls)
+    svc.get(3, negotiate(w=540))                     # far below
+    svc.get(3, negotiate(w=1260))                    # just above target
+    _, state, served = svc.get_or_fallback(3, negotiate(w=1080))  # -> 1120
+    assert state == "FALLBACK" and served.width == 1260  # 140px vs 580px away
+
+
+def test_get_or_fallback_uses_far_larger_rung_as_last_resort(tmp_path):
+    calls = []
+    svc = _svc(tmp_path, calls)
+    svc.get(3, negotiate(w=2048))                    # nothing closer is cached
+    _, state, served = svc.get_or_fallback(3, negotiate(w=1080))
+    assert state == "FALLBACK" and served.width == 2048
 
 
 def test_get_or_fallback_uses_smaller_when_nothing_larger(tmp_path):
@@ -220,8 +255,8 @@ def test_get_or_fallback_cold_start_blocks(tmp_path):
     calls = []
     svc = _svc(tmp_path, calls)
     payload, state, served = svc.get_or_fallback(3, negotiate(w=1080))
-    assert state == "MISS" and served.width == 1080
-    assert payload[0] == b"IMG:3:1080:png"
+    assert state == "MISS" and served.width == 1120
+    assert payload[0] == b"IMG:3:1120:png"
 
 
 def test_get_or_fallback_dedupes_background_render(tmp_path):
@@ -234,7 +269,7 @@ def test_get_or_fallback_dedupes_background_render(tmp_path):
         return data, f"image/{fmt}", '"' + hashlib.sha256(data).hexdigest()[:8] + '"'
 
     svc = RenderService(load_bundle(), cache_dir=str(tmp_path), render_fn=slow_fn)
-    svc.get(3, negotiate(w=1440))                    # prime a fallback rung
+    svc.get(3, negotiate(w=1440))                    # prime a fallback rung (-> 1530)
 
     out = []
     ts = [
@@ -252,8 +287,8 @@ def test_get_or_fallback_dedupes_background_render(tmp_path):
     key = svc.cache_key(3, negotiate(w=1080))
     _wait(lambda: svc.disk.exists(key))
     time.sleep(0.1)
-    assert calls.count((3, 1080, "png")) == 1        # rendered once, not twice
-    assert len(calls) == 2                           # 1440 prime + one 1080 backfill
+    assert calls.count((3, 1120, "png")) == 1        # rendered once, not twice
+    assert len(calls) == 2                           # 1530 prime + one 1120 backfill
 
 
 def test_service_render_busy(tmp_path):
@@ -306,9 +341,9 @@ def test_get_page_headers_and_negotiation(client):
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/webp"
     assert r.headers["x-cache"] == "MISS"
-    assert r.headers["x-render-width"] == "1170"
+    assert r.headers["x-render-width"] == "1120"
     assert r.headers["cache-control"] == "public, max-age=31536000, immutable"
-    assert r.headers["content-location"] == f"/v1/pages/3?w=1170&fmt=webp&v={av}"
+    assert r.headers["content-location"] == f"/v1/pages/3?w=1120&fmt=webp&v={av}"
 
     r2 = client.get(f"/v1/pages/3?sw=412&dpr=2.625&fmt=webp&v={av}")
     assert r2.headers["x-cache"] in ("HIT-MEM", "HIT-DISK")
@@ -334,8 +369,8 @@ def test_post_page_with_screen_body(client):
         json={"screen": {"width_px": 393, "dpr": 3.0}, "format": "png"},
     )
     assert r.status_code == 200
-    assert r.headers["x-render-width"] == "1242"
-    assert r.content == b"IMG:10:1242:png"
+    assert r.headers["x-render-width"] == "1260"
+    assert r.content == b"IMG:10:1260:png"
 
 
 def test_page_out_of_range(client):
@@ -350,11 +385,11 @@ def test_layout_endpoint_headers_and_negotiation(client):
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("application/json")
     assert r.headers["x-cache"] == "MISS"
-    assert r.headers["x-render-width"] == "1170"
+    assert r.headers["x-render-width"] == "1120"
     assert r.headers["cache-control"] == "public, max-age=31536000, immutable"
-    assert r.headers["content-location"] == f"/v1/pages/3/layout?w=1170&v={av}"
+    assert r.headers["content-location"] == f"/v1/pages/3/layout?w=1120&v={av}"
     body = r.json()
-    assert body["page"] == 3 and body["width"] == 1170 and "words" in body
+    assert body["page"] == 3 and body["width"] == 1120 and "words" in body
 
     r2 = client.get(f"/v1/pages/3/layout?sw=412&dpr=2.625&v={av}")
     assert r2.headers["x-cache"] in ("HIT-MEM", "HIT-DISK")
@@ -397,7 +432,8 @@ def test_concurrent_requests_different_sizes(client):
     def hit(w):
         out.append(client.get(f"/v1/pages/7?w={w}&v={av}").status_code)
 
-    ts = [threading.Thread(target=hit, args=(w,)) for w in (540, 720, 1080, 1170, 1242)]
+    # raw widths chosen so each snaps to a distinct ladder rung
+    ts = [threading.Thread(target=hit, args=(w,)) for w in (540, 720, 1000, 1170, 1440)]
     for t in ts:
         t.start()
     for t in ts:
@@ -408,22 +444,22 @@ def test_concurrent_requests_different_sizes(client):
     # once (cold-start XOR background), never twice.
     _wait(lambda: len(client.render_calls) >= 5)
     assert len(client.render_calls) == 5
-    assert {w for _, w, _ in client.render_calls} == {540, 720, 1080, 1170, 1242}
+    assert {w for _, w, _ in client.render_calls} == {540, 740, 1010, 1260, 1530}
 
 
 def test_fallback_response_headers_then_exact(client):
     av = client.get("/v1/manifest").json()["asset_version"]
-    client.get(f"/v1/pages/8?w=1440&fmt=png&v={av}")  # prime a nearer rung
+    client.get(f"/v1/pages/8?w=1530&fmt=png&v={av}")  # prime the only nearer rung
 
-    r = client.get(f"/v1/pages/8?w=1080&fmt=png&v={av}")
+    r = client.get(f"/v1/pages/8?w=1080&fmt=png&v={av}")  # -> target rung 1120
     assert r.status_code == 200
     assert r.headers["x-cache"] == "FALLBACK"
     assert r.headers["x-fallback"] == "1"
-    assert r.headers["x-target-width"] == "1080"
-    assert r.headers["x-render-width"] == "1440"
+    assert r.headers["x-target-width"] == "1120"
+    assert r.headers["x-render-width"] == "1530"
     assert r.headers["cache-control"] == "no-store"
-    assert r.headers["content-location"] == f"/v1/pages/8?w=1440&fmt=png&v={av}"
-    assert r.content == b"IMG:8:1440:png"
+    assert r.headers["content-location"] == f"/v1/pages/8?w=1530&fmt=png&v={av}"
+    assert r.content == b"IMG:8:1530:png"
 
     def exact():
         rr = client.get(f"/v1/pages/8?w=1080&fmt=png&v={av}")
@@ -432,20 +468,20 @@ def test_fallback_response_headers_then_exact(client):
     _wait(lambda: exact() is not None)
     rr = client.get(f"/v1/pages/8?w=1080&fmt=png&v={av}")
     assert rr.headers["x-cache"] in ("HIT-MEM", "HIT-DISK")
-    assert rr.content == b"IMG:8:1080:png"
+    assert rr.content == b"IMG:8:1120:png"
 
 
 def test_layout_fallback_headers(client):
     av = client.get("/v1/manifest").json()["asset_version"]
-    client.get(f"/v1/pages/9/layout?w=1440&v={av}")  # prime a nearer rung
+    client.get(f"/v1/pages/9/layout?w=1530&v={av}")  # prime the only nearer rung
 
     r = client.get(f"/v1/pages/9/layout?w=1080&v={av}")
     assert r.status_code == 200
     assert r.headers["x-cache"] == "FALLBACK"
     assert r.headers["x-fallback"] == "1"
-    assert r.headers["x-render-width"] == "1440"
+    assert r.headers["x-render-width"] == "1530"
     assert r.headers["cache-control"] == "no-store"
-    assert r.json()["width"] == 1440
+    assert r.json()["width"] == 1530
 
 
 # --------------------------------------------------------------------------- #
@@ -486,13 +522,13 @@ def test_real_render_arbitrary_width_dimensions(tmp_path):
     svc = RenderService(_BUNDLE, cache_dir=str(tmp_path), workers=1)
     svc.start()
     try:
-        (png, ct_png, _), _ = svc.get(2, negotiate(w=900, fmt="png"))
-        (webp, ct_webp, _), _ = svc.get(2, negotiate(w=900, fmt="webp"))
+        (png, ct_png, _), _ = svc.get(2, negotiate(w=910, fmt="png"))
+        (webp, ct_webp, _), _ = svc.get(2, negotiate(w=910, fmt="webp"))
     finally:
         svc.close()
 
     im = Image.open(io.BytesIO(png))
-    assert im.size == (900, int(900 * PHI)) and im.mode == "P"
+    assert im.size == (910, int(910 * PHI)) and im.mode == "P"
     assert ct_png == "image/png" and ct_webp == "image/webp"
 
     # webp is lossless: identical decoded pixels, smaller on the wire
