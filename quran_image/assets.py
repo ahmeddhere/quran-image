@@ -11,9 +11,11 @@ is a small, fixed asset bundle -
 None of that depends on the requested dimensions, so it is loaded once per
 process and reused for every device.  :func:`load_bundle` also hashes the
 bundle (file sizes + mtimes + the layout-code version) into a short
-``version`` string; that string is the first component of every cache key,
-server-side and on the device, so shipping new fonts or bumping
-``layout.LAYOUT_VERSION`` transparently invalidates every cached image.
+``version`` string; it is echoed to the device as the ``v`` query param and
+gates HTTP immutability, so shipping new fonts or bumping
+``layout.LAYOUT_VERSION`` makes clients revalidate.  The server-side disk
+cache is a plain ``<width>/<page>.<fmt>`` tree with no version component -
+rotate ``QURAN_CACHE_DIR`` when the assets change.
 
 Locations resolve from (first hit wins):
     explicit argument  ->  environment variable  ->  repo-relative default

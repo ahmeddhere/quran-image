@@ -14,10 +14,12 @@ Design goals from the brief:
   coverage buffer and the PIL image are freed when the worker returns) and the
   number of simultaneous renders is capped; the API process only ever holds
   encoded bytes.
-* **concurrency across devices** - the cache key is
-  ``<asset_version>/<page>/<width>/<fmt>``; different screen sizes are
-  independent keys that render in parallel across the pool, while identical
-  requests coalesce.
+* **concurrency across devices** - the cache key is the on-disk relative path
+  ``<canonical_width>/<page>.<fmt>`` (e.g. ``1120/42.png``); different screen
+  sizes are independent keys that render in parallel across the pool, while
+  identical requests coalesce.  ``asset_version`` is not part of the path - it
+  still drives HTTP immutability via the ``v`` query param, so rotate
+  ``QURAN_CACHE_DIR`` (or clear it) when the source assets change.
 """
 from __future__ import annotations
 
@@ -141,13 +143,17 @@ class RenderService:
             or self._pool is not None
         )
 
-    # -- keys ---------------------------------------------------------------- #
+    # -- keys -------------------------------------------------------------- #
+    # A key is the entry's path relative to the cache dir:
+    #     cache/<canonical_width>/<page>.<fmt>          image
+    #     cache/<canonical_width>/<page>.layout.json    per-word geometry
+    # It is the same string for the RAM LRU and the disk store.
     def cache_key(self, page: int, spec: RenderSpec) -> str:
-        return f"{self.bundle.version}/{page}/{spec.key}"
+        return f"{spec.width}/{page}.{spec.fmt}"
 
     def layout_key(self, page: int, spec: RenderSpec) -> str:
         # ``fmt`` is irrelevant to the geometry; only width changes it.
-        return f"layout/{self.bundle.version}/{page}/{spec.width}"
+        return f"{spec.width}/{page}.layout.json"
 
     # -- main entry point -------------------------------------------------- #
     def get(self, page: int, spec: RenderSpec) -> tuple[Payload, str]:

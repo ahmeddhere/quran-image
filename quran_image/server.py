@@ -374,7 +374,10 @@ def main(argv=None) -> int:
         default=None,
         help="pre-render pages (e.g. --warm 1..604) at the common widths",
     )
-    ap.add_argument("--warm-widths", default="740,1120,1260")
+    ap.add_argument(
+        "--warm-widths",
+        default=",".join(map(str, WIDTH_LADDER)),
+    )
     args = ap.parse_args(argv)
 
     import uvicorn

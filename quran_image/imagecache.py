@@ -1,10 +1,18 @@
 """Server-side image cache: RAM LRU in front of a size-bounded disk store,
 plus request coalescing so a thundering herd renders a page only once.
 
-Layout on disk (one pair of files per entry, key with ``/`` -> ``~``)::
+Layout on disk - a plain width-partitioned tree, one file per entry, no
+sidecar::
 
-    <root>/<version>~<page>~<width>~<fmt>.img     the encoded bytes
-    <root>/<version>~<page>~<width>~<fmt>.json    {content_type, etag, bytes, ts}
+    <root>/<canonical_width>/<page>.png          an encoded PNG page image
+    <root>/<canonical_width>/<page>.webp         the same page as lossless WebP
+    <root>/<canonical_width>/<page>.layout.json  that page's per-word geometry
+
+The key handed to :class:`DiskCache` is exactly that ``/``-separated relative
+path (``"1120/42.png"``); the ``<width>/`` directory is created on demand.
+``content_type`` is inferred from the extension and the strong ``ETag`` is
+recomputed from the bytes with the same formula the renderer uses, so an entry
+needs no companion metadata file.
 
 Everything here is process-safe (threads) and tolerant of a second process or
 node writing the same key concurrently (atomic ``os.replace``); the disk store
@@ -12,10 +20,9 @@ is therefore shareable over NFS/EFS for a multi-node deployment.
 """
 from __future__ import annotations
 
-import json
+import hashlib
 import os
 import threading
-import time
 from collections import OrderedDict
 from typing import Callable
 
@@ -61,76 +68,83 @@ class MemoryLRU:
 
 
 class DiskCache:
-    """LRU-by-atime file store with an opportunistic size cap."""
+    """Width-partitioned file store with an opportunistic size cap.
+
+    One file per entry at ``<root>/<key>`` (``key`` is a ``/``-separated
+    relative path such as ``"1120/42.png"``); no sidecar.  ``content_type`` is
+    inferred from the extension and the strong ``ETag`` is recomputed from the
+    bytes, so a disk entry carries no metadata of its own.  LRU ordering is by
+    mtime, which :meth:`get` refreshes on every read.
+    """
+
+    _CONTENT_TYPES = {
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".json": "application/json",
+    }
 
     def __init__(self, root: str, max_bytes: int = 2 * 1024**3):
         self.root = root
         self.max_bytes = max_bytes
         self._evict_lock = threading.Lock()
         self._puts_since_sweep = 0
-        self._ready = False
 
-    def _ensure_root(self) -> None:
-        if not self._ready:
-            os.makedirs(self.root, exist_ok=True)
-            self._ready = True
+    def _path(self, key: str) -> str:
+        return os.path.join(self.root, *key.split("/"))
 
-    def _base(self, key: str) -> str:
-        return os.path.join(self.root, key.replace("/", "~"))
+    @classmethod
+    def _content_type(cls, key: str) -> str:
+        _, ext = os.path.splitext(key)
+        return cls._CONTENT_TYPES.get(ext.lower(), "application/octet-stream")
+
+    @staticmethod
+    def _etag(data: bytes) -> str:
+        return '"' + hashlib.sha256(data).hexdigest()[:32] + '"'
 
     def exists(self, key: str) -> bool:
         """Cheap presence probe - no file bodies read.  Used to find which
         ladder rungs are already cached for a page without loading them."""
-        return os.path.exists(self._base(key) + ".img")
+        return os.path.exists(self._path(key))
 
     def get(self, key: str) -> Payload | None:
-        base = self._base(key)
+        path = self._path(key)
         try:
-            with open(base + ".json", "r", encoding="utf-8") as fh:
-                meta = json.load(fh)
-            with open(base + ".img", "rb") as fh:
+            with open(path, "rb") as fh:
                 data = fh.read()
-        except (OSError, ValueError):
+        except OSError:
             return None
         try:  # LRU touch; best-effort
-            os.utime(base + ".img", None)
+            os.utime(path, None)
         except OSError:
             pass
-        return data, meta["content_type"], meta["etag"]
+        return data, self._content_type(key), self._etag(data)
 
     def put(self, key: str, payload: Payload) -> None:
-        data, content_type, etag = payload
-        self._ensure_root()
-        base = self._base(key)
-        tmp = f"{base}.img.{os.getpid()}.{threading.get_ident()}.tmp"
+        data = payload[0]
+        path = self._path(key)
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
         try:
             with open(tmp, "wb") as fh:
                 fh.write(data)
-            os.replace(tmp, base + ".img")
-            tmp_meta = tmp + ".json"
-            with open(tmp_meta, "w", encoding="utf-8") as fh:
-                json.dump(
-                    {
-                        "content_type": content_type,
-                        "etag": etag,
-                        "bytes": len(data),
-                        "ts": time.time(),
-                    },
-                    fh,
-                )
-            os.replace(tmp_meta, base + ".json")
+            os.replace(tmp, path)
         except OSError:
-            for p in (tmp, tmp + ".json"):
-                try:
-                    os.remove(p)
-                except OSError:
-                    pass
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
             return
 
         self._puts_since_sweep += 1
         if self._puts_since_sweep >= 64:
             self._puts_since_sweep = 0
             self.sweep()
+
+    def _iter_files(self):
+        for dirpath, _, names in os.walk(self.root):
+            for n in names:
+                if not n.endswith(".tmp"):
+                    yield os.path.join(dirpath, n)
 
     def sweep(self) -> None:
         """Delete least-recently-used entries until under ``max_bytes``."""
@@ -139,44 +153,35 @@ class DiskCache:
         try:
             entries = []
             total = 0
-            with os.scandir(self.root) as it:
-                for e in it:
-                    if not e.name.endswith(".img"):
-                        continue
-                    try:
-                        st = e.stat()
-                    except OSError:
-                        continue
-                    entries.append((st.st_atime, e.path, st.st_size))
-                    total += st.st_size
+            for path in self._iter_files():
+                try:
+                    st = os.stat(path)
+                except OSError:
+                    continue
+                entries.append((st.st_mtime, path, st.st_size))
+                total += st.st_size
             if total <= self.max_bytes:
                 return
-            entries.sort()  # oldest atime first
+            entries.sort()  # oldest mtime first
             for _, path, size in entries:
                 if total <= self.max_bytes:
                     break
-                for p in (path, path[:-4] + ".json"):
-                    try:
-                        os.remove(p)
-                    except OSError:
-                        pass
-                total -= size
+                try:
+                    os.remove(path)
+                    total -= size
+                except OSError:
+                    pass
         finally:
             self._evict_lock.release()
 
     def stats(self) -> dict:
         n = b = 0
-        try:
-            with os.scandir(self.root) as it:
-                for e in it:
-                    if e.name.endswith(".img"):
-                        n += 1
-                        try:
-                            b += e.stat().st_size
-                        except OSError:
-                            pass
-        except OSError:
-            pass
+        for path in self._iter_files():
+            try:
+                b += os.stat(path).st_size
+                n += 1
+            except OSError:
+                pass
         return {"items": n, "bytes": b, "max_bytes": self.max_bytes}
 
 

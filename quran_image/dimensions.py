@@ -91,7 +91,7 @@ class RenderSpec:
 
     @property
     def key(self) -> str:
-        """The per-page portion of a cache key: ``<width>/<fmt>``."""
+        """Compact ``<width>/<fmt>`` tag for this spec (logging / headers)."""
         return f"{self.width}/{self.fmt}"
 
 

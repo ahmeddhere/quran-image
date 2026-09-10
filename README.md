@@ -86,6 +86,11 @@ the historically shipped asset.
    single-flight coalescing → process pool. A cache miss that has *some* other
    rung of the page cached returns the nearest one immediately and renders the
    exact rung in the background; only a true cold start blocks on one render.
+   The disk cache is a plain width-partitioned tree —
+   `<QURAN_CACHE_DIR>/<canonical_width>/<page>.png` (`.webp` / `.layout.json`
+   alongside) — one file per entry, no sidecar; the width folders are created
+   on demand. `content_type` comes from the extension and the `ETag` is
+   recomputed from the bytes, so nothing outside the file itself is stored.
 
 ## Getting started
 
@@ -189,11 +194,11 @@ All optional — every asset path auto-resolves to the repo layout.
 | `QURAN_WORKERS` | CPU count | render process-pool size |
 | `QURAN_BG_WORKERS` | = `QURAN_WORKERS` | background backfill thread-pool size |
 | `QURAN_BG_MAX_QUEUED` | `64` | cap on in-flight background jobs |
-| `QURAN_DISK_CACHE_BYTES` | 2 GiB | disk-cache eviction threshold (LRU by atime) |
+| `QURAN_DISK_CACHE_BYTES` | 2 GiB | disk-cache eviction threshold (LRU by mtime) |
 | `QURAN_FONTS_DIR` | `./fonts` | QCF `*.TTF` directory |
 | `QURAN_DB` | `./data/layout.sqlite` | layout database |
 | `QURAN_METRICS` | `./data/gdtext_metrics.json` | GD::Text metric table |
-| `QURAN_ASSET_VERSION` | *(content hash)* | pin the cache-key version to a release tag so every node/device agrees |
+| `QURAN_ASSET_VERSION` | *(content hash)* | pin the `v` immutability token to a release tag so every node/device agrees |
 
 ## Project layout
 
@@ -246,6 +251,11 @@ balancer, point `QURAN_CACHE_DIR` at a shared filesystem (writes are atomic;
 the render step re-checks the cache first, so cross-node duplicate work is a
 narrow race window). A CDN in front + the `immutable`, version-stamped URLs
 mean most devices never reach the origin twice.
+
+The disk cache path has no `asset_version` component, so when the fonts or
+`layout.LAYOUT_VERSION` change, point `QURAN_CACHE_DIR` at a fresh directory
+(or clear it) as part of the rollout — otherwise stale pixels are served for
+rungs already on disk.
 
 - **No auth** — deploy on a private network or behind an authenticating
   gateway / CDN.

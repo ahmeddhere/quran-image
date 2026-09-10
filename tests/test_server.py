@@ -98,13 +98,19 @@ def test_memory_lru_evicts_by_count_and_bytes():
 def test_disk_cache_roundtrip_and_sweep(tmp_path):
     dc = DiskCache(str(tmp_path), max_bytes=2500)
     for i in range(6):
-        dc.put(f"v/{i}/720/png", (b"a" * 1000, "image/png", f'"{i}"'))
+        dc.put(f"720/{i}.png", (b"a" * 1000, "image/png", f'"{i}"'))
         time.sleep(0.01)
-    got = dc.get("v/5/720/png")
-    assert got is not None and got[0] == b"a" * 1000 and got[2] == '"5"'
+    # files land in the plain width/page tree, no sidecar
+    assert os.path.isfile(tmp_path / "720" / "5.png")
+    assert not any(p.suffix == ".json" for p in (tmp_path / "720").iterdir())
+    got = dc.get("720/5.png")
+    assert got is not None and got[0] == b"a" * 1000
+    assert got[1] == "image/png"
+    # content_type from the extension, strong ETag recomputed from the bytes
+    assert got[2] == '"' + hashlib.sha256(b"a" * 1000).hexdigest()[:32] + '"'
     dc.sweep()
     assert dc.stats()["bytes"] <= 2500
-    assert dc.get("v/0/720/png") is None   # oldest gone
+    assert dc.get("720/0.png") is None   # oldest gone
 
 
 def test_single_flight_coalesces(tmp_path):
@@ -134,11 +140,17 @@ def test_single_flight_coalesces(tmp_path):
 # --------------------------------------------------------------------------- #
 # RenderService with a fake renderer
 # --------------------------------------------------------------------------- #
+# the etag formula mirrors quran_image.service (and DiskCache, which recomputes
+# it on a disk hit) so a MISS payload and a later HIT-DISK payload compare equal
+def _etag(data: bytes) -> str:
+    return '"' + hashlib.sha256(data).hexdigest()[:32] + '"'
+
+
 def _fake_render_fn(counter):
     def fn(page, width, fmt):
         counter.append((page, width, fmt))
         data = f"IMG:{page}:{width}:{fmt}".encode()
-        return data, f"image/{fmt}", '"' + hashlib.sha256(data).hexdigest()[:8] + '"'
+        return data, f"image/{fmt}", _etag(data)
 
     return fn
 
@@ -147,7 +159,7 @@ def _fake_layout_fn(counter):
     def fn(page, width):
         counter.append((page, width))
         data = f'{{"page":{page},"width":{width},"words":[]}}'.encode()
-        return data, "application/json", '"' + hashlib.sha256(data).hexdigest()[:8] + '"'
+        return data, "application/json", _etag(data)
 
     return fn
 
@@ -266,7 +278,7 @@ def test_get_or_fallback_dedupes_background_render(tmp_path):
         calls.append((page, width, fmt))
         time.sleep(0.3)
         data = f"IMG:{page}:{width}:{fmt}".encode()
-        return data, f"image/{fmt}", '"' + hashlib.sha256(data).hexdigest()[:8] + '"'
+        return data, f"image/{fmt}", _etag(data)
 
     svc = RenderService(load_bundle(), cache_dir=str(tmp_path), render_fn=slow_fn)
     svc.get(3, negotiate(w=1440))                    # prime a fallback rung (-> 1530)
@@ -302,7 +314,7 @@ def test_service_render_busy(tmp_path):
     )
     svc._sema.acquire()  # simulate the one slot already taken
     with pytest.raises(RenderBusy):
-        svc._render(3, negotiate(w=720), "v/3/720/png")
+        svc._render(3, negotiate(w=720), "740/3.png")
 
 
 # --------------------------------------------------------------------------- #
