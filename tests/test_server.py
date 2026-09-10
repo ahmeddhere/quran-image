@@ -7,6 +7,7 @@ render and are skipped automatically when the assets are absent.
 from __future__ import annotations
 
 import hashlib
+import io
 import math
 import os
 import sys
@@ -378,6 +379,59 @@ def test_get_page_headers_and_negotiation(client):
     assert r2.headers["x-cache"] in ("HIT-MEM", "HIT-DISK")
 
 
+def test_render_modes_keep_or_quantise_the_antialiasing():
+    """The default mode must preserve FreeType's coverage as real alpha."""
+    import numpy as np
+    from PIL import Image
+
+    from quran_image import render as render_mod
+
+    # a smooth diagonal edge - the shape that shows stair-stepping first
+    y, x = np.mgrid[0:64, 0:64]
+    cov = (np.clip(x - 0.12 * y - 20, 0, 1) * 255).astype(np.uint8)
+    plan = object()
+    _orig = render_mod._coverage
+    render_mod._coverage = lambda _plan: cov
+    try:
+        alpha = render_mod.render_page(plan, mode="alpha")
+        palette = render_mod.render_page(plan, mode="palette")
+        with pytest.raises(ValueError):
+            render_mod.render_page(plan, mode="jpeg")
+    finally:
+        render_mod._coverage = _orig
+
+    # indexed alpha: index == coverage == alpha, one byte per pixel
+    assert alpha.mode == "P"
+    assert alpha.info["transparency"] == bytes(range(256))
+    assert np.array_equal(np.array(alpha), cov)         # coverage kept verbatim
+
+    # the legacy path: 9 levels, and every visible pixel fully opaque
+    assert palette.mode == "P"
+    pal_alpha = np.array(palette.convert("RGBA"))[..., 3]
+    assert set(np.unique(pal_alpha)) <= {0, 255}
+    assert len(np.unique(np.array(palette))) <= 9
+
+    # and it round-trips through the encoder without losing the alpha
+    data, ct = render_mod.encode_image(alpha)
+    assert ct == "image/png"
+    back = np.array(Image.open(io.BytesIO(data)).convert("RGBA"))
+    assert np.array_equal(back[..., 3], cov)            # exact through the encoder
+
+
+def test_render_mode_is_folded_into_the_asset_version(monkeypatch):
+    from quran_image.assets import load_bundle as _load
+
+    monkeypatch.delenv("QURAN_ASSET_VERSION", raising=False)
+    monkeypatch.setenv("QURAN_RENDER_MODE", "alpha")
+    _load.cache_clear()
+    v_alpha = _load().version
+    monkeypatch.setenv("QURAN_RENDER_MODE", "palette")
+    _load.cache_clear()
+    v_palette = _load().version
+    _load.cache_clear()
+    assert v_alpha != v_palette          # flipping the mode rotates every key
+
+
 def test_png_is_the_only_format(client):
     assert client.get("/v1/pages/3?w=1080&fmt=webp").status_code == 422
     assert client.post("/v1/pages/3", json={"width": 1080, "format": "webp"}).status_code == 422
@@ -531,7 +585,10 @@ integration = pytest.mark.skipif(
 
 @integration
 @pytest.mark.parametrize("page", [1, 50])
-def test_real_render_width_1260_matches_reference(tmp_path, page):
+def test_real_render_width_1260_matches_reference(tmp_path, page, monkeypatch):
+    # the references are the legacy libgd palette assets, so pin that mode -
+    # the default "alpha" mode deliberately produces different (better) bytes
+    monkeypatch.setenv("QURAN_RENDER_MODE", "palette")
     ref_path = os.path.join(_REFS, f"page{page}_w1260.png")
     if not os.path.isfile(ref_path):
         pytest.skip(f"{ref_path} reference not present")
@@ -564,7 +621,9 @@ def test_real_render_arbitrary_width_dimensions(tmp_path):
     assert im.size == (910, int(910 * PHI)) and im.mode == "P"
     assert ct_png == "image/png"
 
-    # the palette page decodes to transparent white + 8 grey levels, nothing else
-    rgba = np.array(im.convert("RGBA"))
-    assert set(np.unique(rgba[..., 3])) <= {0, 255}
-    assert len(np.unique(rgba[rgba[..., 3] == 255][..., 0])) <= 9
+    # the fix: a real alpha ramp, not the 9-level libgd stair.  A page of Arabic
+    # script has thousands of partly-covered edge pixels; the legacy palette
+    # output had exactly zero (every visible pixel was fully opaque).
+    alpha = np.array(im.convert("RGBA"))[..., 3]
+    partial = np.unique(alpha[(alpha > 0) & (alpha < 255)])
+    assert len(partial) > 64, "alpha channel looks quantised, not anti-aliased"

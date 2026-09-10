@@ -44,8 +44,10 @@ _W: dict = {}
 
 def _worker_init(db_path: str, fonts_dir: str) -> None:
     from .db import LayoutDB
+    from .render import default_render_mode
 
     _W["db"] = LayoutDB(db_path, fonts_dir)
+    _W["render_mode"] = default_render_mode()
 
 
 def _worker_render(page: int, width: int, fmt: str) -> Payload:
@@ -53,7 +55,7 @@ def _worker_render(page: int, width: int, fmt: str) -> Payload:
     from .render import encode_image, render_page
 
     plan = build_page(_W["db"], page, width)
-    img = render_page(plan, mode="palette")
+    img = render_page(plan, mode=_W["render_mode"])
     data, content_type = encode_image(img, fmt)
     etag = '"' + hashlib.sha256(data).hexdigest()[:32] + '"'
     return data, content_type, etag

@@ -80,8 +80,13 @@ the historically shipped asset.
    layout matches GD and not merely "looks Arabic". Full derivation in
    [`docs/calibration_notes.md`](docs/calibration_notes.md).
 4. **Render** (`quran_image/render.py`) — `max`-composites FreeType's 8-bit
-   coverage, quantises it the libgd way, and emits a tiny mode-`P` PNG
-   (transparent white + 8 greys via `tRNS`). PNG is the only output format.
+   coverage into a one-byte-per-pixel indexed PNG where **the pixel's index is
+   its alpha** (256 black palette entries, `tRNS[i] == i`). All 256 coverage
+   levels reach the device, so diagonals and tashkeel have a real anti-aliased
+   ramp and composite correctly over any background. `QURAN_RENDER_MODE=palette`
+   switches back to the legacy libgd output — 9 quantisation bins, every visible
+   pixel fully opaque — which is what the byte-exact reference test checks.
+   PNG is the only output format.
 5. **Serve** (`quran_image/service.py` + `server.py`) — RAM LRU → disk cache →
    single-flight coalescing → process pool. A cache miss that has *some* other
    rung of the page cached returns the nearest one immediately and renders the
@@ -198,6 +203,7 @@ All optional — every asset path auto-resolves to the repo layout.
 | `QURAN_FONTS_DIR` | `./fonts` | QCF `*.TTF` directory |
 | `QURAN_DB` | `./data/layout.sqlite` | layout database |
 | `QURAN_METRICS` | `./data/gdtext_metrics.json` | GD::Text metric table |
+| `QURAN_RENDER_MODE` | `alpha` | `alpha` = 256-level indexed alpha (recommended); `palette` = byte-exact legacy libgd output (9 levels, no partial alpha); `rgba` = 4-channel |
 | `QURAN_ASSET_VERSION` | *(content hash)* | pin the `v` immutability token to a release tag so every node/device agrees |
 
 ## Project layout

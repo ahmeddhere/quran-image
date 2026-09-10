@@ -102,7 +102,14 @@ def load_bundle(
         version = re.sub(r"[^A-Za-z0-9._-]", "", pinned)[:32] or "pinned"
     else:
         h = hashlib.sha256()
-        h.update(f"quran-image/assets/v1|layout:{LAYOUT_VERSION}".encode())
+        # the render mode changes the bytes of every page, so it belongs in the
+        # version: flipping it rotates every cache key and every device copy
+        from .render import default_render_mode
+
+        h.update(
+            f"quran-image/assets/v1|layout:{LAYOUT_VERSION}"
+            f"|render:{default_render_mode()}".encode()
+        )
         _stamp(h, "db", db_path)
         _stamp(h, "metrics", metrics_path)
         for name in sorted(_safe_listdir(fonts_dir)):
