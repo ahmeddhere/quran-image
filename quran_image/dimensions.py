@@ -13,7 +13,7 @@ ladder** (`WIDTH_LADDER`).  Snapping *up* means the device only ever
 downscales the image it receives - text stays crisp, never blurry - while the
 number of distinct cache entries per page stays at ~18.
 
-    negotiate(screen_width_px=412, dpr=2.625)  ->  width 1120, height 1812
+    negotiate(screen_width_px=360, dpr=3)      ->  width 1080, height 1747
     negotiate(w=1000)                          ->  width 1010, height 1634
 """
 from __future__ import annotations
@@ -31,6 +31,9 @@ PHI = (math.sqrt(5) + 1) / 2
 # ladder had 1242/1260/1290 within 1.4 % of each other and a 33 % gap at 360).
 # 1260 is force-inserted: it is the width the app historically shipped, so a
 # device on that rung still gets a byte-for-byte copy of the legacy asset.
+# 1080 is force-inserted too: 1080 px is by far the most common physical panel
+# width on Android (1080x2400 at dpr 3, i.e. 360 dp), so pinning it lets those
+# devices render 1:1 instead of downscaling a 1120 px image.
 
 
 def _build_width_ladder(
@@ -51,13 +54,13 @@ def _build_width_ladder(
 
 
 # -> 360, 400, 440, 490, 540, 600, 670, 740, 820, 910,
-#    1010, 1120, 1260, 1380, 1530, 1700, 1890, 2048
+#    1010, 1080, 1260, 1380, 1530, 1700, 1890, 2048
 WIDTH_LADDER: tuple[int, ...] = _build_width_ladder(
-    360, 2048, ratio=1.11, pinned=(1260,)
+    360, 2048, ratio=1.11, pinned=(1080, 1260)
 )
 MIN_WIDTH = WIDTH_LADDER[0]
 MAX_WIDTH = WIDTH_LADDER[-1]
-DEFAULT_WIDTH = 1120
+DEFAULT_WIDTH = 1080
 FORMATS = ("png", "webp")
 
 # The Madani Mushaf is 604 pages.

@@ -15,7 +15,7 @@ Design goals from the brief:
   number of simultaneous renders is capped; the API process only ever holds
   encoded bytes.
 * **concurrency across devices** - the cache key is the on-disk relative path
-  ``<canonical_width>/<page>.<fmt>`` (e.g. ``1120/42.png``); different screen
+  ``<canonical_width>/<page>.<fmt>`` (e.g. ``1080/42.png``); different screen
   sizes are independent keys that render in parallel across the pool, while
   identical requests coalesce.  ``asset_version`` is not part of the path - it
   still drives HTTP immutability via the ``v`` query param, so rotate
@@ -289,7 +289,7 @@ class RenderService:
         exact tie (the device then only downscales).  Unlike normal rung
         selection this does *not* deliberately snap upward - a far-larger rung
         is used only when no nearer rung is cached, so a 1080 miss never serves
-        a 4x-heavier 2048 image when a 1010 or 1120 rung is warm."""
+        a 4x-heavier 2048 image when a 1010 or 1260 rung is warm."""
         return sorted(WIDTH_LADDER, key=lambda w: (abs(w - target), -w))
 
     @staticmethod

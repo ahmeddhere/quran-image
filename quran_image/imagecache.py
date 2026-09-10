@@ -9,7 +9,7 @@ sidecar::
     <root>/<canonical_width>/<page>.layout.json  that page's per-word geometry
 
 The key handed to :class:`DiskCache` is exactly that ``/``-separated relative
-path (``"1120/42.png"``); the ``<width>/`` directory is created on demand.
+path (``"1080/42.png"``); the ``<width>/`` directory is created on demand.
 ``content_type`` is inferred from the extension and the strong ``ETag`` is
 recomputed from the bytes with the same formula the renderer uses, so an entry
 needs no companion metadata file.
@@ -71,7 +71,7 @@ class DiskCache:
     """Width-partitioned file store with an opportunistic size cap.
 
     One file per entry at ``<root>/<key>`` (``key`` is a ``/``-separated
-    relative path such as ``"1120/42.png"``); no sidecar.  ``content_type`` is
+    relative path such as ``"1080/42.png"``); no sidecar.  ``content_type`` is
     inferred from the extension and the strong ``ETag`` is recomputed from the
     bytes, so a disk entry carries no metadata of its own.  LRU ordering is by
     mtime, which :meth:`get` refreshes on every read.
