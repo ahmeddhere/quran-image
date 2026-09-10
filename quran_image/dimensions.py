@@ -98,14 +98,32 @@ class RenderSpec:
         return f"{self.width}/{self.fmt}"
 
 
+# How far *above* a rung a request may sit and still snap down to it.  Snapping
+# up is the rule (the device downscales, so text stays crisp), but a request
+# that overshoots a rung by a hair - 412 dp x 2.625 = 1082 px against the 1080
+# rung - would otherwise jump a whole step to 1260: a 16 % oversize image, ~35 %
+# more pixels, to avoid a 0.2 % upscale nobody can see.  2 % is well under the
+# threshold where upscaling is visible and far under one ladder step (~11 %), so
+# it only ever catches these off-by-a-rounding-error cases.
+SNAP_DOWN_TOLERANCE = 0.02
+
+
 def snap_width(px: float) -> int:
-    """Round a desired physical width up to the next ladder rung, clamped."""
+    """Snap a desired physical width to a ladder rung, clamped.
+
+    Rounds *up* to the next rung, except when ``px`` sits within
+    :data:`SNAP_DOWN_TOLERANCE` of the rung below - then it snaps down to that
+    rung and the device upscales by an imperceptible amount.
+    """
     px = int(math.ceil(px))
     if px <= MIN_WIDTH:
         return MIN_WIDTH
     if px >= MAX_WIDTH:
         return MAX_WIDTH
-    return WIDTH_LADDER[bisect_left(WIDTH_LADDER, px)]
+    i = bisect_left(WIDTH_LADDER, px)
+    if WIDTH_LADDER[i] != px and px <= WIDTH_LADDER[i - 1] * (1 + SNAP_DOWN_TOLERANCE):
+        return WIDTH_LADDER[i - 1]
+    return WIDTH_LADDER[i]
 
 
 def negotiate(

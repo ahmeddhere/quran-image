@@ -7,6 +7,7 @@ render and are skipped automatically when the assets are absent.
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import sys
 import threading
@@ -21,6 +22,7 @@ from quran_image.dimensions import (  # noqa: E402
     MAX_WIDTH,
     MIN_WIDTH,
     PHI,
+    SNAP_DOWN_TOLERANCE,
     WIDTH_LADDER,
     negotiate,
     snap_width,
@@ -36,8 +38,22 @@ def test_snap_width_rounds_up_and_clamps():
     assert snap_width(1) == MIN_WIDTH
     assert snap_width(10_000) == MAX_WIDTH
     assert snap_width(1000) == 1010          # normal request snaps to next larger rung
-    assert snap_width(1081) == 1260          # up to next rung
+    assert snap_width(1102) == 1260          # up to next rung
     assert snap_width(1080) == 1080          # exact rung stays
+
+
+def test_snap_width_tolerates_a_hair_over_a_rung():
+    # a request that overshoots a rung by <=2% snaps down to it rather than
+    # jumping a whole step (412 dp * 2.625 = 1082 px -> the 1080 rung, not 1260)
+    assert snap_width(1082) == 1080
+    assert negotiate(screen_width_px=412, dpr=2.625).width == 1080
+    # the band is [rung, rung * (1 + tolerance)], widths ceil'd to whole px first
+    edge = math.floor(1080 * (1 + SNAP_DOWN_TOLERANCE))              # 1101
+    assert snap_width(edge) == 1080
+    assert snap_width(edge + 1) == 1260                              # just past it
+    # the tolerance is narrow enough not to swallow an honest mid-ladder request
+    assert snap_width(1000) == 1010
+    assert snap_width(1150) == 1260
 
 
 def test_width_ladder_is_geometric_and_keeps_the_legacy_rung():
