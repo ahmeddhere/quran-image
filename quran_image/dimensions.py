@@ -61,7 +61,10 @@ WIDTH_LADDER: tuple[int, ...] = _build_width_ladder(
 MIN_WIDTH = WIDTH_LADDER[0]
 MAX_WIDTH = WIDTH_LADDER[-1]
 DEFAULT_WIDTH = 1080
-FORMATS = ("png", "webp")
+# PNG is the only supported container: the page is an 8-grey + transparency
+# palette image, which PNG stores about as tightly as anything lossless and
+# every client decodes without a codec check.
+FORMATS = ("png",)
 
 # The Madani Mushaf is 604 pages.
 PAGE_MIN = 1
@@ -89,7 +92,7 @@ class RenderSpec:
 
     width: int          # canonical render width - a WIDTH_LADDER rung
     height: int         # int(width * PHI) - the Mushaf is always phi-ratio
-    fmt: str            # "png" | "webp"
+    fmt: str            # always "png" - the only supported format
     requested_width: int  # what the device actually asked for (for logging/headers)
 
     @property

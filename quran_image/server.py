@@ -9,7 +9,7 @@
 The device flow (see ``README.md``):
 
 1. read the real screen: ``physical_w = logical_w * devicePixelRatio``
-2. ``GET /v1/pages/{page}?w={physical_w}&fmt=webp&v={asset_version}``
+2. ``GET /v1/pages/{page}?w={physical_w}&v={asset_version}``
 3. server negotiates ``w`` to a canonical rung, renders *iff* not cached,
    returns the image immediately with a strong ``ETag``
 4. device stores the bytes keyed by the returned ``Content-Location``
@@ -121,7 +121,7 @@ class ScreenMetrics(BaseModel):
 class PageRequest(BaseModel):
     screen: ScreenMetrics | None = None
     width: int | None = Field(None, description="explicit physical render width (px)")
-    format: str = Field("png", pattern="^(png|webp)$")
+    format: str = Field("png", pattern="^png$")
     max_width: int | None = Field(None, description="hard client cap on render width")
 
 
@@ -288,7 +288,7 @@ def _mount_routes(app: FastAPI) -> None:
                 "revalidate_with": "If-None-Match against the returned ETag",
             },
             "endpoints": {
-                "image_get": "/v1/pages/{page}?w={physical_px}&fmt={png|webp}&v={asset_version}",
+                "image_get": "/v1/pages/{page}?w={physical_px}&fmt=png&v={asset_version}",
                 "image_post": "/v1/pages/{page}  (JSON body: screen metrics)",
                 "layout_get": "/v1/pages/{page}/layout?w={physical_px}&v={asset_version}",
             },
@@ -307,7 +307,7 @@ def _mount_routes(app: FastAPI) -> None:
         sw: float | None = Query(None, description="logical screen/viewport width (dp)"),
         sh: float | None = Query(None, description="logical screen height (dp)"),
         dpr: float | None = Query(None, description="devicePixelRatio"),
-        fmt: str = Query("png", pattern="^(png|webp)$"),
+        fmt: str = Query("png", pattern="^png$"),
         max_w: float | None = Query(None, description="hard cap on render width"),
         v: str | None = Query(None, description="asset version for immutable caching"),
     ) -> Response:

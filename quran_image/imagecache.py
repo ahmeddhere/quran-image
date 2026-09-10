@@ -5,7 +5,6 @@ Layout on disk - a plain width-partitioned tree, one file per entry, no
 sidecar::
 
     <root>/<canonical_width>/<page>.png          an encoded PNG page image
-    <root>/<canonical_width>/<page>.webp         the same page as lossless WebP
     <root>/<canonical_width>/<page>.layout.json  that page's per-word geometry
 
 The key handed to :class:`DiskCache` is exactly that ``/``-separated relative
@@ -79,7 +78,6 @@ class DiskCache:
 
     _CONTENT_TYPES = {
         ".png": "image/png",
-        ".webp": "image/webp",
         ".json": "application/json",
     }
 

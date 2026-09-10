@@ -71,12 +71,12 @@ def test_width_ladder_is_geometric_and_keeps_the_legacy_rung():
 
 
 def test_negotiate_from_screen_metrics():
-    spec = negotiate(screen_width_px=360, dpr=3, fmt="webp")
+    spec = negotiate(screen_width_px=360, dpr=3)
     assert spec.width == 1080
     assert spec.height == int(1080 * PHI)
-    assert spec.fmt == "webp"
+    assert spec.fmt == "png"
     assert spec.requested_width == 1080
-    assert spec.key == "1080/webp"
+    assert spec.key == "1080/png"
 
 
 def test_negotiate_explicit_width_and_default():
@@ -211,9 +211,9 @@ def test_service_different_widths_are_independent(tmp_path):
     svc = _svc(tmp_path, calls)
     svc.get(3, negotiate(w=720))
     svc.get(3, negotiate(w=1080))
-    svc.get(3, negotiate(w=1080, fmt="webp"))
+    svc.get(3, negotiate(w=1530))
     assert len(calls) == 3
-    assert {c[1:] for c in calls} == {(740, "png"), (1080, "png"), (1080, "webp")}
+    assert {c[1:] for c in calls} == {(740, "png"), (1080, "png"), (1530, "png")}
 
 
 def _wait(pred, timeout=5.0):
@@ -359,23 +359,28 @@ def client(tmp_path):
 def test_manifest_shape(client):
     m = client.get("/v1/manifest").json()
     assert m["pages"] == {"min": 1, "max": 604, "count": 604}
-    assert m["formats"] == ["png", "webp"]
+    assert m["formats"] == ["png"]
     assert m["width"]["ladder"][0] == MIN_WIDTH
     assert m["asset_version"]
 
 
 def test_get_page_headers_and_negotiation(client):
     av = client.get("/v1/manifest").json()["asset_version"]
-    r = client.get(f"/v1/pages/3?sw=360&dpr=3&fmt=webp&v={av}")
+    r = client.get(f"/v1/pages/3?sw=360&dpr=3&fmt=png&v={av}")
     assert r.status_code == 200
-    assert r.headers["content-type"] == "image/webp"
+    assert r.headers["content-type"] == "image/png"
     assert r.headers["x-cache"] == "MISS"
     assert r.headers["x-render-width"] == "1080"
     assert r.headers["cache-control"] == "public, max-age=31536000, immutable"
-    assert r.headers["content-location"] == f"/v1/pages/3?w=1080&fmt=webp&v={av}"
+    assert r.headers["content-location"] == f"/v1/pages/3?w=1080&fmt=png&v={av}"
 
-    r2 = client.get(f"/v1/pages/3?sw=360&dpr=3&fmt=webp&v={av}")
+    r2 = client.get(f"/v1/pages/3?sw=360&dpr=3&fmt=png&v={av}")
     assert r2.headers["x-cache"] in ("HIT-MEM", "HIT-DISK")
+
+
+def test_png_is_the_only_format(client):
+    assert client.get("/v1/pages/3?w=1080&fmt=webp").status_code == 422
+    assert client.post("/v1/pages/3", json={"width": 1080, "format": "webp"}).status_code == 422
 
 
 def test_stale_version_is_not_immutable(client):
@@ -552,16 +557,14 @@ def test_real_render_arbitrary_width_dimensions(tmp_path):
     svc.start()
     try:
         (png, ct_png, _), _ = svc.get(2, negotiate(w=910, fmt="png"))
-        (webp, ct_webp, _), _ = svc.get(2, negotiate(w=910, fmt="webp"))
     finally:
         svc.close()
 
     im = Image.open(io.BytesIO(png))
     assert im.size == (910, int(910 * PHI)) and im.mode == "P"
-    assert ct_png == "image/png" and ct_webp == "image/webp"
+    assert ct_png == "image/png"
 
-    # webp is lossless: identical decoded pixels, smaller on the wire
-    a = np.array(Image.open(io.BytesIO(png)).convert("RGBA"))
-    b = np.array(Image.open(io.BytesIO(webp)).convert("RGBA"))
-    assert np.array_equal(a, b)
-    assert len(webp) < len(png)
+    # the palette page decodes to transparent white + 8 grey levels, nothing else
+    rgba = np.array(im.convert("RGBA"))
+    assert set(np.unique(rgba[..., 3])) <= {0, 255}
+    assert len(np.unique(rgba[rgba[..., 3] == 255][..., 0])) <= 9

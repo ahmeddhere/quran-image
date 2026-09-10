@@ -54,10 +54,10 @@ the historically shipped asset.
 ## How it works
 
 ```
-┌────────────┐   GET /v1/pages/5?w=1170&fmt=webp&v=<ver>             ┌──────────────────────────┐
+┌────────────┐   GET /v1/pages/5?w=1170&v=<ver>                      ┌──────────────────────────┐
 │   device   │ ───────────────────────────────────────────────────▶ │   FastAPI  (stateless)   │
 │  w = logical                                                      │                          │
-│      × dpr  │   200  image/webp  + ETag + Content-Location        │  RAM LRU ─▶ disk cache    │
+│      × dpr  │   200  image/png   + ETag + Content-Location        │  RAM LRU ─▶ disk cache    │
 │            │ ◀─────────────────────────────────────────────────── │      │ miss               │
 │  (device    │                                                     │  single-flight (1/key)   │
 │   caches    │   re-fetch = If-None-Match ─▶ 304                   │      │                     │
@@ -80,14 +80,14 @@ the historically shipped asset.
    layout matches GD and not merely "looks Arabic". Full derivation in
    [`docs/calibration_notes.md`](docs/calibration_notes.md).
 4. **Render** (`quran_image/render.py`) — `max`-composites FreeType's 8-bit
-   coverage, quantises it the libgd way, emits a tiny mode-`P` PNG (`tRNS`) or a
-   lossless WebP (~10–20 % smaller, byte-identical decoded).
+   coverage, quantises it the libgd way, and emits a tiny mode-`P` PNG
+   (transparent white + 8 greys via `tRNS`). PNG is the only output format.
 5. **Serve** (`quran_image/service.py` + `server.py`) — RAM LRU → disk cache →
    single-flight coalescing → process pool. A cache miss that has *some* other
    rung of the page cached returns the nearest one immediately and renders the
    exact rung in the background; only a true cold start blocks on one render.
    The disk cache is a plain width-partitioned tree —
-   `<QURAN_CACHE_DIR>/<canonical_width>/<page>.png` (`.webp` / `.layout.json`
+   `<QURAN_CACHE_DIR>/<canonical_width>/<page>.png` (`.layout.json`
    alongside) — one file per entry, no sidecar; the width folders are created
    on demand. `content_type` comes from the extension and the `ETag` is
    recomputed from the bytes, so nothing outside the file itself is stored.
@@ -140,7 +140,7 @@ uvicorn quran_image.server:app --host 0.0.0.0 --port 8080 --workers 4
 
 ```bash
 curl http://localhost:8080/healthz                        # {"status":"ok", ...}
-curl "http://localhost:8080/v1/pages/5?w=1170&fmt=webp" -o page5.webp
+curl "http://localhost:8080/v1/pages/5?w=1170" -o page5.png
 curl "http://localhost:8080/v1/pages/5/layout?w=1170"     # per-word pixel boxes
 ```
 
@@ -151,7 +151,7 @@ Interactive API docs at `http://localhost:8080/docs`.
 | endpoint | purpose |
 |---|---|
 | `GET /v1/manifest` | bootstrap: `asset_version`, page range, formats, the width ladder, caching rules |
-| `GET /v1/pages/{page}` · `HEAD` | render/serve one page image (`w` \| `sw`+`dpr`, `fmt=png\|webp`, `max_w`, `v`) |
+| `GET /v1/pages/{page}` · `HEAD` | render/serve one page image (`w` \| `sw`+`dpr`, `max_w`, `v`) |
 | `POST /v1/pages/{page}` | same, taking raw screen metrics as a JSON body |
 | `GET /v1/pages/{page}/layout` · `HEAD` | the page's per-word pixel boxes, in the image's coordinate space |
 | `GET /v1/stats` | render / hit / coalesce / fallback counters + derived rates |
@@ -272,7 +272,7 @@ A client should:
    manifest ladder locally, so the request already asks for the rung it will
    get;
 2. per page, fetch the image and its `/layout` in parallel
-   (`GET /v1/pages/{page}?w=&fmt=webp&v=` and `GET /v1/pages/{page}/layout?w=&v=`);
+   (`GET /v1/pages/{page}?w=&v=` and `GET /v1/pages/{page}/layout?w=&v=`);
 3. write both to disk immediately, keyed by `w` + `asset_version`, storing the
    image `ETag`;
 4. on later opens read the local files, revalidating in the background with

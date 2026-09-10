@@ -85,36 +85,22 @@ def render_page(plan: PagePlan, mode: str = "palette") -> Image.Image:
 # --------------------------------------------------------------------------- #
 # in-memory encoding  -  the server never touches the filesystem for this
 # --------------------------------------------------------------------------- #
-_CONTENT_TYPE = {"png": "image/png", "webp": "image/webp"}
+_CONTENT_TYPE = {"png": "image/png"}
 
 
 def encode_image(img: Image.Image, fmt: str = "png", *, optimize: bool = True) -> tuple[bytes, str]:
     """Encode ``img`` to ``(bytes, content_type)`` for an HTTP response.
 
-    ``png``  - a tiny mode-``P`` + ``tRNS`` file (transparent white + 8 greys).
-    ``webp`` - lossless (+ ``exact``) WebP built from the same coverage;
-               ~10-20 % smaller on the wire, decodes to byte-identical RGBA.
-
-    Both keep the Mushaf layout untouched - only the container changes.
+    ``png`` is the only format: a tiny mode-``P`` + ``tRNS`` file (transparent
+    white + 8 greys).  The Mushaf layout is untouched - only the container
+    changes.
     """
     fmt = fmt.lower()
+    if fmt != "png":
+        raise ValueError(f"unsupported image format {fmt!r} (png only)")
     buf = io.BytesIO()
-    if fmt == "png":
-        params = {"format": "PNG", "optimize": optimize, "compress_level": 9}
-        if img.mode == "P":
-            params["transparency"] = 0
-        img.save(buf, **params)
-    elif fmt == "webp":
-        # lossless so the 8-level AA ramp and the alpha survive exactly;
-        # method=4 is the latency/size sweet spot.  ``convert`` leaves fully
-        # transparent pixels as (0,0,0,0); force them to white so a raw RGB
-        # read matches the palette PNG too (the composite is identical either
-        # way).  Result: byte-for-byte the same decoded RGBA as the PNG.
-        rgba = np.array(img.convert("RGBA"))
-        rgba[rgba[..., 3] == 0, :3] = 255
-        Image.fromarray(rgba, "RGBA").save(
-            buf, format="WEBP", lossless=True, quality=100, method=4, exact=True
-        )
-    else:
-        raise ValueError(f"unsupported image format {fmt!r} (png|webp)")
+    params = {"format": "PNG", "optimize": optimize, "compress_level": 9}
+    if img.mode == "P":
+        params["transparency"] = 0
+    img.save(buf, **params)
     return buf.getvalue(), _CONTENT_TYPE[fmt]
